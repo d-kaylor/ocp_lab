@@ -1,0 +1,246 @@
+---
+
+- name: Deploy OpenShift 3 Environment
+  hosts: nodes
+  gather_facts: no
+  vars:
+    ssh_args: "-o StrictHostKeyChecking=accept-new"
+    ansible_ssh_pass: "{{ root_password }}"
+    authorized_key: "/home/dkaylor/.ssh/id_rsa.pub"    
+    terraform:
+      ocp_version: 3
+      project: /home/dkaylor/terraform/ocp/ocp3
+      image_path: /mnt/vms/images/rhel-server-7.8-x86_64-ocp.qcow2
+      prepared_image: true
+      memory: "8192"
+      vcpu: 4
+    network:
+      domain: ocp3.lab.local
+      dns: 192.168.0.1
+      cidr: 23
+      gateway: 192.168.0.1
+      load_balancer: 192.168.0.1
+    subscription:
+      rhsm_user: "rhn-support-dkaylor"
+      rhsm_password: "{{ rhsm_password }}"
+      rhsm_pool: "8a85f9996c6dca38016c8be5352434c5"
+    configure_dnsmasq: false
+    configure_haproxy: false
+    master_ips: []
+    infra_ips: []
+    node_ips: []
+
+  tasks: 
+    - name: Collect master ips
+      set_fact:
+        master_ips: "{{ master_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['nodes'] }}"
+      when: "'master' in hostvars[item]['openshift_node_group_name']"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Collect infra node ips
+      set_fact:
+        infra_ips: "{{ infra_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['nodes'] }}"
+      when: "'infra' in hostvars[item]['openshift_node_group_name'] and 'master' not in hostvars[item]['openshift_node_group_name']"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Collect compute node ips
+      set_fact:
+        node_ips: "{{ node_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['nodes'] }}"
+      when: "'compute' in hostvars[item]['openshift_node_group_name']"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Configure dnsmasq
+      block:
+      - name: dnsmasq - Add dns entries
+        template:
+          src: dns-ocp3.conf.j2
+          dest: /etc/dnsmasq.d/dns-ocp3.conf
+          owner: root
+          group: root
+          mode: 0644
+
+      - name: dnsmasq - Restart service
+        service:
+         name: dnsmasq
+         state: restarted
+      when: configure_dnsmasq
+      run_once: true
+      delegate_to: localhost
+      become: true
+
+    - name: Configure HAProxy
+      block:
+        - name: HAProxy - Add apps to http frontend
+          lineinfile:
+            path: /etc/haproxy/haproxy.cfg
+            insertafter: "frontend http-in"
+            line: "    use_backend ocp3-http-route if { hdr(host) -m end .apps.{{ network['domain'] }} }"
+    
+        - name: HAProxy - Add apps to https frontend
+          lineinfile:
+            path: /etc/haproxy/haproxy.cfg
+            insertafter: "frontend https-in"
+            line: "    use_backend ocp3-https-route if { req.ssl_sni -m end .apps.{{ network['domain'] }} }"
+    
+        - name: HAProxy - Add console to https frontend
+          lineinfile:
+            path: /etc/haproxy/haproxy.cfg
+            insertafter: "frontend https-in"
+            line: "    use_backend ocp3-https-console if { req.ssl_sni -i console.{{ network['domain'] }} }"
+    
+        - name: HAProxy - Add backends
+          blockinfile:
+            path: /etc/haproxy/haproxy.cfg
+            marker: "# {mark} ANSIBLE MANAGED BLOCK OCP3"
+            block: |
+              #---------------------------------------------------------------------
+              # ocp3 backends
+              #---------------------------------------------------------------------
+              backend ocp3-http-route
+              {% for ip in infra_ips %}
+                  server infra-{{loop.index}} {{ ip }}:80 check
+              {% endfor %}
+    
+              backend ocp3-https-route
+                  mode tcp
+                  option tcplog
+              {% for ip in infra_ips %}
+                  server infra-{{loop.index}} {{ ip }}:443 check
+              {% endfor %}
+    
+              backend ocp3-https-console
+                  mode tcp
+                  option tcplog
+              {% for ip in master_ips %}
+                  server infra-{{loop.index}} {{ ip }}:443 check
+              {% endfor %}
+        - name: HAProxy - restart service
+          service:
+            name: haproxy
+            state: restarted
+      when: configure_haproxy
+      run_once: true
+      delegate_to: localhost
+      become: true
+
+    - name: Provision VMs
+      terraform:
+        project_path: "{{ terraform['project'] }}"
+        state: present
+        variables:
+          root_password: "{{ root_password }}"
+          ocp_version: "{{ terraform['ocp_version'] }}"
+          image_path: "{{ terraform['image_path'] }}"
+          memory: "{{ terraform['memory'] }}"
+          vcpu: "{{ terraform['vcpu'] }}"
+          domain:  "{{ network['domain'] }}"
+          dns:  "{{ network['dns'] }}"
+          master_ips: "{{ master_ips | join(',') }}"
+          infra_ips: "{{ infra_ips | join(',') }}"
+          node_ips: "{{ node_ips | join(',') }}"
+          cidr:  "{{ network['cidr'] }}"
+          gateway:  "{{ network['gateway'] }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Wait for first boot
+      wait_for_connection:
+        delay: 10
+        timeout: 300
+
+    - name: Register server
+      redhat_subscription:
+        state: present
+        username: "{{ subscription['rhsm_user'] }}"
+        password: "{{ subscription['rhsm_password'] }}"
+        pool_ids: "{{ subscription['rhsm_pool'] }}"
+        autosubscribe: no
+
+    - name: Disable all RHSM repositories
+      rhsm_repository:
+        name: "*"
+        state: disabled
+
+    - name: Enable OpenShift repos
+      rhsm_repository:
+        name:
+          - rhel-7-server-rpms
+          - rhel-7-server-extras-rpms
+          - rhel-7-server-ose-3.11-rpms
+          - rhel-7-server-ansible-2.9-rpms
+        state: enabled
+
+    - name: Update all packages
+      yum:
+        name: "*"
+        state: latest
+      when: not terraform['prepared_image']
+
+    - name: Install prereqs and installer
+      yum:
+        name: ["wget", "git", "net-tools", "bind-utils", "yum-utils", "iptables-services", "bridge-utils", "bash-completion", "kexec-tools", "psacct", "openshift-ansible"]
+        state: latest
+      when: not terraform['prepared_image']
+
+    - name: Reboot server
+      shell: "sleep 2 && /usr/bin/systemctl reboot"
+      async: 1
+      poll: 0
+      when: not terraform['prepared_image']
+
+    - name: Wait for reboot to complete
+      wait_for_connection:
+        delay: 10
+        timeout: 300
+      when: not terraform['prepared_image']
+
+    - name: Install docker
+      yum:
+        name: docker
+        state: latest
+      when: not terraform['prepared_image']
+
+    - name: Configure docker storage
+      copy:
+        dest: /etc/sysconfig/docker-storage-setup
+        content: |
+          DEVS=/dev/vdb
+          VG=docker-vg
+      when: not terraform['prepared_image']
+
+    - name: Set up docker storage
+      command: /usr/bin/docker-storage-setup
+      when: not terraform['prepared_image']
+
+    - name: Start and enable docker
+      service:
+        name: docker
+        enabled: yes
+        state: started
+      when: not terraform['prepared_image']
+
+    - name: Set authorized keys for OpenShift install
+      authorized_key:
+        user: root
+        state: present
+        key: "{{ lookup('file', authorized_key) }}"
+
+    - name: Run OCP3 prerequisites playbook
+      shell: "ansible-playbook -i {{ inventory_file }} --extra-vars 'ansible_ssh_pass={{ root_password }}' playbooks/prerequisites.yml > ocp_prerequisites.out 2>&1"
+      args:
+        chdir: /home/dkaylor/ansible/openshift-ansible
+      run_once: true
+      delegate_to: localhost
+
+    - name: Run OCP3 deploy playbook
+      shell: "ansible-playbook -i {{ inventory_file }} --extra-vars 'ansible_ssh_pass={{ root_password }}' playbooks/deploy_cluster.yml > ocp_deploy.out 2>&1"
+      args:
+        chdir: /home/dkaylor/ansible/openshift-ansible
+      run_once: true
+      delegate_to: localhost

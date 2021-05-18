@@ -1,0 +1,11 @@
+[connection]
+type=ethernet
+id="Wired connection 1"
+interface-name=${interface}
+
+[ipv4]
+method=manual
+addresses=${ip_address}
+gateway=${gateway}
+dns=${dns}
+dns-search=${search}

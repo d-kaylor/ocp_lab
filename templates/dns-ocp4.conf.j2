@@ -1,0 +1,19 @@
+# OpenShift 4 Hosts
+{% for host in groups['bootstrap'] %}
+host-record={{ host }}.{{ network['domain'] }},{{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+{% for host in groups['masters'] %}
+host-record={{ host }}.{{ network['domain'] }},{{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+{% for host in groups['workers'] %}
+host-record={{ host }}.{{ network['domain'] }},{{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+
+host-record=api.{{ network['domain'] }},{{ network['load_balancer'] }}
+host-record=api-int.{{ network['domain'] }},{{ network['load_balancer'] }}
+address=/apps.{{ network['domain'] }}/{{ network['load_balancer'] }}
+
+{% for host in groups['masters'] %}
+#host-record=etcd-{{ loop.index-1 }}.{{ network['domain'] }},{{ hostvars[host]['ansible_host'] }}
+#srv-host=_etcd-server-ssl._tcp.{{ network['domain'] }},etcd-{{ loop.index-1 }}.{{ network['domain'] }},2380,0,10
+{% endfor %}

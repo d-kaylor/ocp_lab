@@ -1,0 +1,172 @@
+- name: Deploy OpenShift 4 Environment
+  hosts: localhost
+  gather_facts: no
+  vars:
+    configure_libvirt: false
+    libvirt_storage_path: /var/lib/libvirt/images/
+    terraform_release: https://releases.hashicorp.com/terraform/0.15.3/terraform_0.15.3_linux_amd64.zip
+    terraform_libvirt_path: "{{ lookup('env','HOME') }}/.local/share/terraform/plugins/registry.terraform.io/dmacvicar/libvirt/0.6.3/linux_amd64"
+    http_alternate_port: 8080
+  vars_files:
+    - ocp4_vars.yml
+    - passwd.yml
+
+  tasks:
+    - name: Install Terraform
+      unarchive:
+        src: "{{ terraform_release }}"
+        dest: "{{ terraform['binary_path'] }}"
+        remote_src: True
+
+    - name: Create directory for terraform libvirt provider
+      file:
+        path: "{{ terraform_libvirt_path }}"
+        state: directory
+        recurse: yes
+        mode: 0755
+
+    - name: Deploy terraform libvirt provider
+      copy:
+        src: "terraform-provider-libvirt"
+        dest: "{{ terraform_libvirt_path }}"
+        mode: 0755
+
+    - name: Configure libvirt
+      block:
+      - name: libvirt - Install
+        dnf:
+          name: libvirt-daemon,libguestfs-tools,python3-lxml
+          state: latest
+      
+      - name: libvirt - Turn off sVirt confinement
+        lineinfile:
+          path: /etc/libvirt/qemu.conf
+          regexp: '^#security_driver = "selinux"'
+          line: 'security_driver = "none"'
+      
+      - name: libvirt - Enable service
+        service:
+          name: libvirtd
+          enabled: yes
+          state: started
+      
+      - name: libvirt - Disable default network
+        virt_net:
+          state: inactive
+          name: default
+      
+      - name: libvirt - Undefine default network
+        virt_net:
+          name: default
+          command: undefine
+      
+      - name: libvirt - Define default network
+        virt_net:
+          name: default
+          command: define
+          xml: '{{ lookup("template", "net-default.xml.j2", errors="strict") }}'
+      
+      - name: libvirt - Autostart network
+        virt_net:
+          autostart: yes
+          name: default
+      
+      - name: libvirt - Activate network
+        virt_net:
+          name: default
+          state: active
+      
+      - name: libvirt - Disable default pool
+        virt_pool:
+          state: inactive
+          name: default
+      
+      - name: libvirt - Undefine default pool
+        virt_pool:
+          name: default
+          command: undefine
+        ignore_errors: yes
+      
+      - name: libvirt - Define default pool
+        virt_pool:
+          name: default
+          command: define
+          xml: '{{ lookup("template", "pool-default.xml.j2", errors="strict") }}'
+      
+      - name: libvirt - Autostart pool
+        virt_pool:
+          autostart: yes
+          name: default
+      
+      - name: libvirt - Activate pool
+        virt_pool:
+          name: default
+          state: active
+      when: configure_libvirt
+      become: true
+
+    - name: Configure dnsmasq
+      block:
+      - name: dnsmasq - Install
+        dnf:
+          name: dnsmasq
+          state: latest
+
+      - name: dnsmasq - Enable service
+        service:
+          name: dnsmasq
+          enabled: yes
+          state: started
+      when: configure_dnsmasq
+      become: true
+
+    - name: Configure haproxy
+      block:
+      - name: haproxy - Install
+        dnf:
+          name: haproxy
+          state: latest
+
+      - name: haproxy - Configure
+        template:
+          src: haproxy.cfg.j2
+          dest: /etc/haproxy/haproxy.cfg
+
+      - name: haproxy - Enable service
+        service:
+          name: haproxy
+          enabled: yes
+          state: started
+      when: configure_haproxy
+      become: true
+  
+    - name: Configure httpd
+      block:
+      - name: httpd - Install
+        dnf:
+          name: httpd
+          state: latest
+
+      - name: httpd - Configure
+        lineinfile:
+          path: /etc/httpd/conf/httpd.conf
+          regexp: '^Listen 80'
+          line: 'Listen {{ http_alternate_port }}'
+        notify: 'Restart httpd service'
+
+      - name: httpd - Create directory for ignition files
+        file:
+          path: "{{ web_path }}"
+          state: directory
+          owner: root
+          group: root
+          mode: 0755
+          recurse: yes
+
+      - name: httpd - Enable service
+        service:
+          name: httpd
+          enabled: yes
+          state: started
+      when: configure_httpd
+      become: true

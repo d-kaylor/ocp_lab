@@ -1,0 +1,317 @@
+---
+
+- name: Deploy OpenShift 4 Environment
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ocp_version: 4
+    config_path: /home/dkaylor/ocp4/config
+    web_path: /var/www/html/ocp/install/
+    terraform:
+      project: /home/dkaylor/terraform/ocp/ocp4
+      image_path: /mnt/vms/images/rhcos-4.7.0-x86_64-qemu.x86_64.qcow2
+      prepared_image: true
+      memory: "16384"
+      vcpu: 4
+    network:
+      domain: ocp4.lab.local
+      dns: 192.168.0.1
+      interface: ens3
+      cidr: 23
+      gateway: 192.168.0.1
+      load_balancer: 192.168.0.1
+    configure_dnsmasq: false
+    configure_haproxy: false
+    master_ips: []
+    worker_ips: []
+    approve_csrs: !unsafe oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' | xargs oc adm certificate approve
+
+  tasks:
+    - name: Collect master ips
+      set_fact:
+        master_ips: "{{ master_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['masters'] }}"
+
+    - name: Collect worker ips
+      set_fact:
+        worker_ips: "{{ worker_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['workers'] }}"
+
+    - name: Configure dnsmasq
+      block:
+      - name: dnsmasq - Add dns entries
+        template:
+          src: dns-ocp4.conf.j2
+          dest: /etc/dnsmasq.d/dns-ocp4.conf
+          owner: root
+          group: root
+          mode: 0644
+
+      - name: dnsmasq - Restart service
+        service:
+         name: dnsmasq
+         state: restarted
+      when: configure_dnsmasq
+      become: true
+
+    - name: Configure HAProxy
+      block:
+      - name: HAProxy - Add to http frontend
+        lineinfile:
+          path: /etc/haproxy/haproxy.cfg
+          insertafter: "frontend http-in"
+          line: "    use_backend ocp4-http if { hdr(host) -m end .{{ network['domain'] }} }"
+  
+      - name: HAProxy - Add to https frontend
+        lineinfile:
+          path: /etc/haproxy/haproxy.cfg
+          insertafter: "frontend https-in"
+          line: "    use_backend ocp4-https if { req.ssl_sni -m end .{{ network['domain'] }} }"
+  
+      - name: HAProxy - Add backends
+        blockinfile:
+          path: /etc/haproxy/haproxy.cfg
+          marker: "# {mark} ANSIBLE MANAGED BLOCK OCP4"
+          block: |
+            #---------------------------------------------------------------------
+            # ocp4 backends
+            #---------------------------------------------------------------------
+  
+            backend ocp4-http
+            {% for ip in worker_ips %}
+                server worker-{{loop.index}} {{ ip }}:80 check
+            {% endfor %}
+  
+            backend ocp4-https
+                mode tcp
+                option tcplog
+            {% for ip in worker_ips %}
+                server worker-{{loop.index}} {{ ip }}:443 check
+            {% endfor %}
+  
+            listen ocp4-api
+                mode tcp
+                option tcplog
+                bind *:6443
+            {% for host in groups['bootstrap'] %}
+                server bootstrap-{{loop.index}} {{ hostvars[host]['ansible_host'] }}:6443 check
+            {% endfor %}
+            {% for ip in master_ips %}
+                server master-{{loop.index}} {{ ip }}:6443 check
+            {% endfor %}
+  
+            listen ocp4-mc
+                mode tcp
+                option tcplog
+                bind *:22623
+            {% for host in groups['bootstrap'] %}
+                server bootstrap-{{loop.index}} {{ hostvars[host]['ansible_host'] }}:22623 check
+            {% endfor %}
+            {% for ip in master_ips %}
+                server master-{{loop.index}} {{ ip }}:22623 check
+            {% endfor %}
+  
+      - name: HAProxy - Restart service
+        service:
+          name: haproxy
+          state: restarted
+      when: configure_haproxy
+      become: true
+
+    - name: Delete existing install directory
+      file:
+        path: "{{ config_path }}/install"
+        state: absent
+
+    - name: Create install directory
+      file:
+        path: "{{ config_path }}/install"
+        state: directory
+
+    - name: Copy install-config.yaml to install directory
+      copy:
+        src: "{{ config_path }}/install-config.yaml"
+        dest: "{{ config_path }}/install"
+
+    - name: Create manifests
+      command: openshift-install create manifests --dir=install
+      args:
+        chdir: "{{ config_path }}"
+
+    - name: Set mastersSchedulable to false
+      replace:
+        path: "{{ config_path }}/install/manifests/cluster-scheduler-02-config.yml"
+        regexp: "mastersSchedulable: true"
+        replace: "mastersSchedulable: false"
+
+    - name: Create ignition files
+      command: openshift-install create ignition-configs --dir=install
+      args:
+        chdir: "{{ config_path }}"
+
+    - name: Copy ignition files to web directory
+      copy:
+        src: "{{ item }}"
+        dest: "{{ web_path }}"
+      with_fileglob:
+        - "{{ config_path }}/install/*.ign"
+      become: true
+
+    - name: Provision VMs
+      terraform:
+        project_path: "{{ terraform['project'] }}"
+        state: present
+        variables:
+          ocp_version: "{{ ocp_version }}"
+          image_path: "{{ terraform['image_path'] }}"
+          memory: "{{ terraform['memory'] }}"
+          vcpu: "{{ terraform['vcpu'] }}"
+          domain: "{{ network['domain'] }}"
+          dns:  "{{ network['dns'] }}"
+          interface: "{{ network['interface'] }}"
+          bootstrap_ip: "{{ hostvars[ (groups['bootstrap'][0]) ]['ansible_host']}}"
+          master_ips: "{{ master_ips | join(',') }}"
+          worker_ips: "{{ worker_ips | join(',') }}"
+          cidr:  "{{ network['cidr'] }}"
+          gateway:  "{{ network['gateway'] }}"
+          dns:  "{{ network['dns'] }}"
+
+    - name: Enable bootstrap nodes in haproxy
+      replace:
+        path: /etc/haproxy/haproxy.cfg
+        regexp: '([ \t]*)#(\s*server bootstrap-1.*)'
+        replace: '\1\2'
+      become: true
+
+    - name: Restart haproxy service
+      service:
+        name: haproxy
+        state: restarted
+      become: true
+    
+    - name: Wait for cluster bootstrap. This will take a while...
+      command: openshift-install --dir=install wait-for bootstrap-complete --log-level=info
+      args:
+        chdir: "{{ config_path }}"
+
+    - name: Disable bootstrap nodes in haproxy
+      replace:
+        path: /etc/haproxy/haproxy.cfg
+        regexp: '(server bootstrap-1)'
+        replace: '#\1'
+      become: true
+
+    - name: Restart haproxy service
+      service:
+        name: haproxy
+        state: restarted
+      become: true
+
+    - name: Shut down bootstrap VM
+      virt:
+        name: "{{ hostvars[ (groups['bootstrap'][0]) ]['inventory_hostname']}}.{{ network['domain'] }}"
+        state: shutdown
+      become: true
+
+    - name: Wait for node-bootstrapper CSRs
+      shell: "oc get csr | grep system:serviceaccount:openshift-machine-config-operator:node-bootstrapper | grep Pending | wc -l"
+      register: csr_result
+      until: "csr_result.stdout|int == worker_ips|length"
+      retries: 60
+      delay: 10
+      environment:
+        KUBECONFIG: "{{ config_path }}/install/auth/kubeconfig"
+
+    - name: Sign pending CSRs
+      shell: "{{ approve_csrs }}"
+      environment:
+        KUBECONFIG: "{{ config_path }}/install/auth/kubeconfig"
+
+    - name: Wait for worker CSRs
+      shell: "oc get csr | grep system:node:{{ item }}"
+      register: csr_result
+      until: "'Pending' in csr_result.stdout"
+      retries: 60
+      delay: 10
+      loop: "{{ groups['workers'] }}"
+      environment:
+        KUBECONFIG: "{{ config_path }}/install/auth/kubeconfig"
+
+    - name: Sign pending CSRs
+      shell: "{{ approve_csrs }}"
+      environment:
+        KUBECONFIG: "{{ config_path }}/install/auth/kubeconfig"
+
+    - name: Wait for cluster install to complete. This will take a while...
+      command: openshift-install --dir=install wait-for install-complete --log-level=info
+      register: install_result
+      args:
+        chdir: "{{ config_path }}"
+
+    - name: Install complete
+      debug:
+        msg: "{{ install_result.stdout }}"
+
+    - name: Configure registry for emptyDir storage
+      k8s:
+        kubeconfig: "{{ config_path }}/install/auth/kubeconfig"
+        state: present
+        definition:
+          apiVersion: imageregistry.operator.openshift.io/v1
+          kind: Config
+          metadata:
+            name: cluster
+          spec:
+            managementState: "Managed"
+            storage:
+              emptyDir: {}
+
+    - name: Add htpasswd file secret
+      k8s:
+        kubeconfig: "{{ config_path }}/install/auth/kubeconfig"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: htpass-secret
+            namespace: openshift-config
+          type: Opaque
+          data:
+            htpasswd: "{{ lookup('file', './files/htpasswd.openshift') | b64encode }}"
+
+    - name: Add htpasswd identity provider
+      k8s:
+        kubeconfig: "{{ config_path }}/install/auth/kubeconfig"
+        state: present
+        definition:
+          apiVersion: config.openshift.io/v1
+          kind: OAuth
+          metadata:
+            name: cluster
+          spec:
+            identityProviders:
+            - name: htpasswd_provider
+              mappingMethod: claim
+              type: HTPasswd
+              htpasswd:
+                fileData:
+                  name: htpass-secret
+
+    - name: Give admin user cluster-admin privileges
+      k8s:
+        kubeconfig: "{{ config_path }}/install/auth/kubeconfig"
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: cluster-admin-admin
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cluster-admin
+          subjects:
+          - apiGroup: rbac.authorization.k8s.io
+            kind: User
+            name: admin

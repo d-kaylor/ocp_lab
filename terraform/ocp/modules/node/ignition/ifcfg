@@ -1,0 +1,10 @@
+NAME=${interface}
+DEVICE=${interface}
+TYPE=Ethernet
+ONBOOT=yes
+BOOTPROTO=none
+IPADDR=${ip_address}
+PREFIX=${prefix}
+DNS1=${dns}
+GATEWAY=${gateway}
+DOMAIN=${search}

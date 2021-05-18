@@ -1,0 +1,6 @@
+# OpenShift 3 Hosts
+{% for host in groups['nodes'] %}
+host-record={{ host }},{{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+address=/apps.{{ network['domain'] }}/{{ network['load_balancer'] }}
+address=/console.{{ network['domain'] }}/{{ network['load_balancer'] }}

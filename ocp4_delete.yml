@@ -1,0 +1,71 @@
+---
+
+- name: Delete OpenShift 4 Environment
+  hosts: bootstrap:masters:workers
+  gather_facts: no
+  vars:
+    ocp_version: 4
+    config_path: /home/dkaylor/ocp4/config
+    web_path: /var/www/html/ocp/install/
+    terraform:
+      project: /home/dkaylor/terraform/ocp/ocp4
+      image_path: /mnt/vms/images/rhcos-4.5.6-x86_64-qemu.x86_64.qcow2
+      prepared_image: true
+      memory: "16384"
+      vcpu: 4
+    network:
+      domain: ocp4.lab.local
+      dns: 192.168.0.1
+      interface: ens3
+      cidr: 23
+      gateway: 192.168.0.1
+    master_ips: []
+    worker_ips: []
+
+  tasks:
+    - name: Collect master ips
+      set_fact:
+        master_ips: "{{ master_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['masters'] }}"
+
+    - name: Collect worker ips
+      set_fact:
+        worker_ips: "{{ worker_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['workers'] }}"
+
+    - name: Destroy VMs
+      terraform:
+        project_path: "{{ terraform['project'] }}"
+        state: absent
+        variables:
+          ocp_version: "{{ ocp_version }}"
+          image_path: "{{ terraform['image_path'] }}"
+          memory: "{{ terraform['memory'] }}"
+          vcpu: "{{ terraform['vcpu'] }}"
+          domain: "{{ network['domain'] }}"
+          dns:  "{{ network['dns'] }}"
+          interface: "{{ network['interface'] }}"
+          bootstrap_ip: "{{ hostvars[ (groups['bootstrap'][0]) ]['ansible_host']}}"
+          master_ips: "{{ master_ips | join(',') }}"
+          worker_ips: "{{ worker_ips | join(',') }}"
+          cidr:  "{{ network['cidr'] }}"
+          gateway:  "{{ network['gateway'] }}"
+          dns:  "{{ network['dns'] }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Remove public keys from known_hosts (ips)
+      known_hosts:
+        name: "{{ ansible_host }}"
+        path: "{{ lookup('env','HOME') }}/.ssh/known_hosts"
+        state: absent
+      delegate_to: localhost
+      throttle: 1
+
+    - name: Remove public keys from known_hosts (hostnames)
+      known_hosts:
+        name: "{{ inventory_hostname }}"
+        path: "{{ lookup('env','HOME') }}/.ssh/known_hosts"
+        state: absent
+      delegate_to: localhost
+      throttle: 1

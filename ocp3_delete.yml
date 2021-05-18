@@ -1,0 +1,98 @@
+---
+
+- name: Delete OpenShift 3 Environment
+  hosts: nodes
+  gather_facts: no
+  vars:
+    ansible_ssh_pass: "{{ root_password }}"
+    authorized_key: "/home/dkaylor/.ssh/id_rsa.pub"
+    terraform:
+      ocp_version: 3
+      project: /home/dkaylor/terraform/ocp/ocp3
+      image_path: /mnt/vms/images/rhel-server-7.8-x86_64-ocp.qcow2
+      prepared_image: true
+      memory: "8192"
+      vcpu: 4
+    network:
+      domain: ocp3.lab.local
+      dns: 192.168.0.1
+      cidr: 23
+      gateway: 192.168.0.1
+    subscription:
+      rhsm_user: "rhn-support-dkaylor"
+      rhsm_password: "{{ rhsm_password }}"
+      rhsm_pool: "8a85f9996c6dca38016c8be5352434c5"
+    master_ips: []
+    infra_ips: []
+    node_ips: []
+
+  tasks:
+    - name: Collect master ips
+      set_fact:
+        master_ips: "{{ master_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['nodes'] }}"
+      when: "'master' in hostvars[item]['openshift_node_group_name']"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Collect infra node ips
+      set_fact:
+        infra_ips: "{{ infra_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['nodes'] }}"
+      when: "'infra' in hostvars[item]['openshift_node_group_name'] and 'master' not in hostvars[item]['openshift_node_group_name']"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Collect compute node ips
+      set_fact:
+        node_ips: "{{ node_ips + [hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['nodes'] }}"
+      when: "'compute' in hostvars[item]['openshift_node_group_name']"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Unregister server
+      redhat_subscription:
+        state: absent
+        username: "{{ subscription['rhsm_user'] }}"
+        password: "{{ subscription['rhsm_password'] }}"
+        pool_ids: "{{ subscription['rhsm_pool'] }}"
+        autosubscribe: no
+
+    - name: Destroy VMs
+      terraform:
+        project_path: "{{ terraform['project'] }}"
+        state: absent
+        variables:
+          root_password: "{{ root_password }}"
+          ocp_version: "{{ terraform['ocp_version'] }}"
+          image_path: "{{ terraform['image_path'] }}"
+          memory: "{{ terraform['memory'] }}"
+          vcpu: "{{ terraform['vcpu'] }}"
+          domain:  "{{ network['domain'] }}"
+          dns:  "{{ network['dns'] }}"
+          master_ips: "{{ master_ips | join(',') }}"
+          infra_ips: "{{ infra_ips | join(',') }}"
+          node_ips: "{{ node_ips | join(',') }}"
+          cidr:  "{{ network['cidr'] }}"
+          gateway:  "{{ network['gateway'] }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Remove public keys from known_hosts (ips)
+      known_hosts:
+        name: "{{ ansible_host }}"
+        path: "{{ lookup('env','HOME') }}/.ssh/known_hosts"
+        state: absent
+      delegate_to: localhost
+      throttle: 1
+
+    - name: Remove public keys from known_hosts (hostnames)
+      known_hosts:
+        name: "{{ inventory_hostname }}"
+        path: "{{ lookup('env','HOME') }}/.ssh/known_hosts"
+        state: absent
+      delegate_to: localhost
+      throttle: 1
+
+

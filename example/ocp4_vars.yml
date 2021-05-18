@@ -1,0 +1,19 @@
+configure_dnsmasq: false
+configure_haproxy: false
+
+config_path: /home/user/ocp4/config
+web_path: /var/www/html/ocp/install/
+
+terraform:
+  project: /home/user/terraform/ocp/ocp4
+  image_path: /mnt/vms/images/rhcos-4.7.0-x86_64-qemu.x86_64.qcow2
+  prepared_image: true
+  memory: "16384"
+  vcpu: 4
+network:
+  domain: ocp4.lab.local
+  dns: 192.168.0.1
+  interface: ens3
+  cidr: 23
+  gateway: 192.168.0.1
+  load_balancer: 192.168.0.1

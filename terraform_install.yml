@@ -1,0 +1,18 @@
+- name: Download terraform
+  unarchive:
+    src: https://releases.hashicorp.com/terraform/0.14.11/terraform_0.14.11_linux_amd64.zip
+    dest: "{{ terraform['binary_path'] }}"
+    remote_src: True
+
+- name: Create directory for terraform libvirt provider
+  file:
+    path: "{{ lookup('env','HOME') }}/.local/share/terraform/plugins/registry.terraform.io/dmacvicar/libvirt/0.6.3/linux_amd64"
+    state: directory
+    recurse: yes
+    mode: 0755
+
+- name: Deploy terraform libvirt provider
+  copy:
+    src: "terraform-provider-libvirt"
+    dest: "{{ lookup('env','HOME') }}/.local/share/terraform/plugins/registry.terraform.io/dmacvicar/libvirt/0.6.3/linux_amd64"
+    mode: 0755
