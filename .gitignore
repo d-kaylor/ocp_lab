@@ -1,2 +1,17 @@
 files/htpasswd.openshift
 files/install-config.yaml
+files/openshift-install
+files/terraform
+install/
+ocp4_install/
+terraform/ocp/ocp3/ocp3.tfvars
+terraform/ocp/ocp3/terraform.tfstate*
+terraform/ocp/ocp3/.terraform*
+terraform/ocp/ocp4/ocp4.tfvars
+terraform/ocp/ocp4/terraform.tfstate*
+terraform/ocp/ocp4/.terraform*
+ocp3_inventory
+ocp3_vars.yml
+ocp4_inventory
+ocp4_vars.yml
+passwd.yml

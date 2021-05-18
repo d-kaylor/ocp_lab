@@ -1,3 +1,11 @@
 ansible_become_pass: password
-root_password: password
+ansible_ssh_pass: password
+
+rhsm_user: user
 rhsm_password: password
+rhsm_pool: pool_id
+
+registry_user: user
+registry_password: password 
+
+pull_secret: secret

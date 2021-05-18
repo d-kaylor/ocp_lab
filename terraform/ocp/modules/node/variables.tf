@@ -14,9 +14,10 @@ variable node_number {
   type = string
 }
 
+# Default set to make this var optinal. RHCOS will not have a root password.
 variable "root_password" {
   type    = string
-  default = "passw0rd"
+  default = "&@mihDBWp!D#3D"
 }
 
 variable "memory" {

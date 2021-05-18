@@ -28,7 +28,7 @@ openshift_disable_check=disk_availability,memory_availability,docker_storage
 
 # Auth
 openshift_master_identity_providers=[{'name': 'htpasswd_auth', 'login': 'true', 'challenge': 'true', 'kind': 'HTPasswdPasswordIdentityProvider'}]
-openshift_master_htpasswd_file=/mnt/raid/home/docs/ansible/ocp_lab/files/htpasswd.openshift
+openshift_master_htpasswd_file=/home/user/ocp_lab/files/htpasswd.openshift
 
 # Certs
 openshift_hosted_registry_cert_expire_days=3650

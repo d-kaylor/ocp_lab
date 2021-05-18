@@ -4,27 +4,12 @@
   hosts: localhost
   gather_facts: no
   vars:
-    ocp_version: 4
-    config_path: /home/dkaylor/ocp4/config
-    web_path: /var/www/html/ocp/install/
-    terraform:
-      project: /home/dkaylor/terraform/ocp/ocp4
-      image_path: /mnt/vms/images/rhcos-4.7.0-x86_64-qemu.x86_64.qcow2
-      prepared_image: true
-      memory: "16384"
-      vcpu: 4
-    network:
-      domain: ocp4.lab.local
-      dns: 192.168.0.1
-      interface: ens3
-      cidr: 23
-      gateway: 192.168.0.1
-      load_balancer: 192.168.0.1
-    configure_dnsmasq: false
-    configure_haproxy: false
     master_ips: []
     worker_ips: []
     approve_csrs: !unsafe oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' | xargs oc adm certificate approve
+  vars_files:
+    - ocp4_vars.yml
+    - passwd.yml
 
   tasks:
     - name: Collect master ips
@@ -36,6 +21,42 @@
       set_fact:
         worker_ips: "{{ worker_ips + [hostvars[item]['ansible_host']] }}"
       loop: "{{ groups['workers'] }}"
+
+    - name: Check for RHCOS image
+      stat:
+        path: "{{ terraform['image_path'] }}"
+      register: rhcos_stat
+
+    - name: Download RHCOS
+      get_url:
+        url: "{{ rhcos_download_url }}"
+        dest: "/tmp/{{ rhcos_download_url.split('/')[-1] }}"
+      when: not rhcos_stat.stat.exists
+
+    - name: Extract RHCOS image
+      command: "gunzip /tmp/{{ rhcos_download_url.split('/')[-1] }}"
+      when: not rhcos_stat.stat.exists
+
+    - name: Move RHCOS image to image_path
+      command: "mv /tmp/{{ rhcos_download_url.split('/')[-1].split('.')[:-1] | join('.') }} {{ rhcos_path }}"
+      when: not rhcos_stat.stat.exists
+      become: true
+
+    - name: Check for openshift_installer
+      stat:
+        path: "{{ installer_path }}/openshift-install"
+      register: installer_stat
+
+    - name: Download installer
+      unarchive:
+        src: "{{ installer_download_url }}"
+        dest: "{{ installer_path }}"
+        exclude: "README.md"
+        remote_src: True
+      when: not installer_stat.stat.exists
+
+    - name: Install terraform
+      include_tasks: terraform_install.yml
 
     - name: Configure dnsmasq
       block:
@@ -54,7 +75,7 @@
       when: configure_dnsmasq
       become: true
 
-    - name: Configure HAProxy
+    - name: Configure haproxy
       block:
       - name: HAProxy - Add to http frontend
         lineinfile:
@@ -62,13 +83,13 @@
           insertafter: "frontend http-in"
           line: "    use_backend ocp4-http if { hdr(host) -m end .{{ network['domain'] }} }"
   
-      - name: HAProxy - Add to https frontend
+      - name: haproxy - Add to https frontend
         lineinfile:
           path: /etc/haproxy/haproxy.cfg
           insertafter: "frontend https-in"
           line: "    use_backend ocp4-https if { req.ssl_sni -m end .{{ network['domain'] }} }"
   
-      - name: HAProxy - Add backends
+      - name: haproxy - Add backends
         blockinfile:
           path: /etc/haproxy/haproxy.cfg
           marker: "# {mark} ANSIBLE MANAGED BLOCK OCP4"
@@ -111,7 +132,7 @@
                 server master-{{loop.index}} {{ ip }}:22623 check
             {% endfor %}
   
-      - name: HAProxy - Restart service
+      - name: haproxy - Restart service
         service:
           name: haproxy
           state: restarted
@@ -120,49 +141,74 @@
 
     - name: Delete existing install directory
       file:
-        path: "{{ config_path }}/install"
+        path: "{{ install_dir }}"
         state: absent
 
     - name: Create install directory
       file:
-        path: "{{ config_path }}/install"
+        path: "{{ install_dir }}"
         state: directory
+        recurse: true
 
     - name: Copy install-config.yaml to install directory
       copy:
-        src: "{{ config_path }}/install-config.yaml"
-        dest: "{{ config_path }}/install"
+        src: "install-config.yaml"
+        dest: "{{ install_dir }}"
+
+    - name: Update install-config.yaml domain
+      replace:
+        dest: "{{ install_dir }}/install-config.yaml"
+        regexp: "^(baseDomain: ).*"
+        replace: '\1{{ network["domain"].split(".")[1:] | join(".") }}'
+
+    - name: Update install-config.yaml name
+      replace:
+        dest: "{{ install_dir }}/install-config.yaml"
+        regexp: "^(metadata:\n  name: ).*"
+        replace: '\1{{ network["domain"].split(".")[0] }}'
+
+    - name: Update install-config.yaml pull secret
+      replace:
+        dest: "{{ install_dir }}/install-config.yaml"
+        regexp: "^(pullSecret: ').*(')"
+        replace: '\1{{ pull_secret }}\2'
+
+    - name: Update install-config.yaml ssh key
+      replace:
+        dest: "{{ install_dir }}/install-config.yaml"
+        regexp: "^(sshKey: ').*(')"
+        replace: '\1{{ item }}\2'
+      with_file:
+        - "{{ authorized_key }}"
 
     - name: Create manifests
-      command: openshift-install create manifests --dir=install
-      args:
-        chdir: "{{ config_path }}"
+      command: "{{ installer_path }}/openshift-install create manifests --dir={{ install_dir }}"
 
     - name: Set mastersSchedulable to false
       replace:
-        path: "{{ config_path }}/install/manifests/cluster-scheduler-02-config.yml"
+        path: "{{ install_dir }}/manifests/cluster-scheduler-02-config.yml"
         regexp: "mastersSchedulable: true"
         replace: "mastersSchedulable: false"
 
     - name: Create ignition files
-      command: openshift-install create ignition-configs --dir=install
-      args:
-        chdir: "{{ config_path }}"
+      command: "{{ installer_path }}/openshift-install create ignition-configs --dir={{ install_dir }}"
 
     - name: Copy ignition files to web directory
       copy:
         src: "{{ item }}"
-        dest: "{{ web_path }}"
+        dest: "{{ ignition_http_path }}"
       with_fileglob:
-        - "{{ config_path }}/install/*.ign"
+        - "{{ install_dir }}/*.ign"
       become: true
 
     - name: Provision VMs
       terraform:
-        project_path: "{{ terraform['project'] }}"
+        binary_path: "{{ terraform['binary_path'] }}/terraform"
+        project_path: "{{ terraform['project_path'] }}"
+        force_init: true
         state: present
         variables:
-          ocp_version: "{{ ocp_version }}"
+          ocp_version: 4
           image_path: "{{ terraform['image_path'] }}"
           memory: "{{ terraform['memory'] }}"
           vcpu: "{{ terraform['vcpu'] }}"
@@ -190,9 +236,7 @@
       become: true
     
     - name: Wait for cluster bootstrap. This will take a while...
-      command: openshift-install --dir=install wait-for bootstrap-complete --log-level=info
-      args:
-        chdir: "{{ config_path }}"
+      command: "{{ installer_path }}/openshift-install --dir={{ install_dir }} wait-for bootstrap-complete --log-level=info"
 
     - name: Disable bootstrap nodes in haproxy
       replace:
@@ -220,12 +264,12 @@
       retries: 60
       delay: 10
       environment:
-        KUBECONFIG: "{{ config_path }}/install/auth/kubeconfig"
+        KUBECONFIG: "{{ install_dir }}/auth/kubeconfig"
 
     - name: Sign pending CSRs
       shell: "{{ approve_csrs }}"
       environment:
-        KUBECONFIG: "{{ config_path }}/install/auth/kubeconfig"
+        KUBECONFIG: "{{ install_dir }}/auth/kubeconfig"
 
     - name: Wait for worker CSRs
       shell: "oc get csr | grep system:node:{{ item }}"
@@ -235,18 +279,16 @@
       delay: 10
       loop: "{{ groups['workers'] }}"
       environment:
-        KUBECONFIG: "{{ config_path }}/install/auth/kubeconfig"
+        KUBECONFIG: "{{ install_dir }}/auth/kubeconfig"
 
     - name: Sign pending CSRs
       shell: "{{ approve_csrs }}"
       environment:
-        KUBECONFIG: "{{ config_path }}/install/auth/kubeconfig"
+        KUBECONFIG: "{{ install_dir }}/auth/kubeconfig"
 
     - name: Wait for cluster install to complete. This will take a while...
-      command: openshift-install --dir=install wait-for install-complete --log-level=info
+      command: "{{ installer_path }}/openshift-install --dir={{ install_dir }} wait-for install-complete --log-level=info"
       register: install_result
-      args:
-        chdir: "{{ config_path }}"
 
     - name: Install complete
       debug:
@@ -254,7 +296,7 @@
 
     - name: Configure registry for emptyDir storage
       k8s:
-        kubeconfig: "{{ config_path }}/install/auth/kubeconfig"
+        kubeconfig: "{{ install_dir }}/auth/kubeconfig"
         state: present
         definition:
           apiVersion: imageregistry.operator.openshift.io/v1
@@ -268,7 +310,7 @@
 
     - name: Add htpasswd file secret
       k8s:
-        kubeconfig: "{{ config_path }}/install/auth/kubeconfig"
+        kubeconfig: "{{ install_dir }}/auth/kubeconfig"
         state: present
         definition:
           apiVersion: v1
@@ -282,7 +324,7 @@
 
     - name: Add htpasswd identity provider
       k8s:
-        kubeconfig: "{{ config_path }}/install/auth/kubeconfig"
+        kubeconfig: "{{ install_dir }}/auth/kubeconfig"
         state: present
         definition:
           apiVersion: config.openshift.io/v1
@@ -300,7 +342,7 @@
 
     - name: Give admin user cluster-admin privileges
       k8s:
-        kubeconfig: "{{ config_path }}/install/auth/kubeconfig"
+        kubeconfig: "{{ install_dir }}/auth/kubeconfig"
         state: present
         definition:
           apiVersion: rbac.authorization.k8s.io/v1

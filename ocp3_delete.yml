@@ -4,27 +4,12 @@
   hosts: nodes
   gather_facts: no
   vars:
-    ansible_ssh_pass: "{{ root_password }}"
-    authorized_key: "/home/dkaylor/.ssh/id_rsa.pub"
-    terraform:
-      ocp_version: 3
-      project: /home/dkaylor/terraform/ocp/ocp3
-      image_path: /mnt/vms/images/rhel-server-7.8-x86_64-ocp.qcow2
-      prepared_image: true
-      memory: "8192"
-      vcpu: 4
-    network:
-      domain: ocp3.lab.local
-      dns: 192.168.0.1
-      cidr: 23
-      gateway: 192.168.0.1
-    subscription:
-      rhsm_user: "rhn-support-dkaylor"
-      rhsm_password: "{{ rhsm_password }}"
-      rhsm_pool: "8a85f9996c6dca38016c8be5352434c5"
     master_ips: []
     infra_ips: []
     node_ips: []
+  vars_files:
+    - ocp3_vars.yml
+    - passwd.yml
 
   tasks:
     - name: Collect master ips
@@ -51,21 +36,25 @@
       run_once: true
       delegate_to: localhost
 
+    - name: Install terraform
+      include_tasks: terraform_install.yml
+
     - name: Unregister server
       redhat_subscription:
         state: absent
-        username: "{{ subscription['rhsm_user'] }}"
-        password: "{{ subscription['rhsm_password'] }}"
-        pool_ids: "{{ subscription['rhsm_pool'] }}"
+        username: "{{ rhsm_user }}"
+        password: "{{ rhsm_password }}"
+        pool_ids: "{{ rhsm_pool }}"
         autosubscribe: no
 
     - name: Destroy VMs
       terraform:
-        project_path: "{{ terraform['project'] }}"
+        binary_path: "{{ terraform['binary_path'] }}/terraform"
+        project_path: "{{ terraform['project_path'] }}"
         state: absent
         variables:
-          root_password: "{{ root_password }}"
-          ocp_version: "{{ terraform['ocp_version'] }}"
+          root_password: "{{ ansible_ssh_pass }}"
+          ocp_version: "3"
           image_path: "{{ terraform['image_path'] }}"
           memory: "{{ terraform['memory'] }}"
           vcpu: "{{ terraform['vcpu'] }}"

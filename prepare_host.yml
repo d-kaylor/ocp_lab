@@ -1,35 +1,20 @@
-- name: Deploy OpenShift 4 Environment
+- name: Prepare host for OpenShift deployment
   hosts: localhost
   gather_facts: no
+  become: true
   vars:
     configure_libvirt: false
     libvirt_storage_path: /var/lib/libvirt/images/
-    terraform_release: https://releases.hashicorp.com/terraform/0.15.3/terraform_0.15.3_linux_amd64.zip
-    terraform_libvirt_path: "{{ lookup('env','HOME') }}/.local/share/terraform/plugins/registry.terraform.io/dmacvicar/libvirt/0.6.3/linux_amd64"
     http_alternate_port: 8080
   vars_files:
     - ocp4_vars.yml
     - passwd.yml
 
   tasks:
-    - name: Install Terraform
-      unarchive:
-        src: "{{ terraform_release }}"
-        dest: "{{ terraform['binary_path'] }}"
-        remote_src: True
-
-    - name: Create directory for terraform libvirt provider
-      file:
-        path: "{{ terraform_libvirt_path }}"
-        state: directory
-        recurse: yes
-        mode: 0755
-
-    - name: Deploy terraform libvirt provider
-      copy:
-        src: "terraform-provider-libvirt"
-        dest: "{{ terraform_libvirt_path }}"
-        mode: 0755
+    - name: Install playbook deps
+      dnf:
+        name: python3-openshift
+        state: latest
 
     - name: Configure libvirt
       block:
@@ -103,7 +88,6 @@
           name: default
           state: active
       when: configure_libvirt
-      become: true
 
     - name: Configure dnsmasq
       block:
@@ -118,7 +102,6 @@
           enabled: yes
           state: started
       when: configure_dnsmasq
-      become: true
 
     - name: Configure haproxy
       block:
@@ -138,7 +121,6 @@
           enabled: yes
           state: started
       when: configure_haproxy
-      become: true
   
     - name: Configure httpd
       block:
@@ -169,4 +151,3 @@
           enabled: yes
           state: started
       when: configure_httpd
-      become: true

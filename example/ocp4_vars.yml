@@ -1,15 +1,24 @@
+authorized_key: "/home/user/.ssh/id_rsa.pub"
+
 configure_dnsmasq: false
 configure_haproxy: false
+configure_httpd: false
 
-config_path: /home/user/ocp4/config
-web_path: /var/www/html/ocp/install/
+rhcos_download_url: https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/latest/4.7.7/rhcos-4.7.7-x86_64-qemu.x86_64.qcow2.gz
+rhcos_path: /var/lib/libvirt/images/
+installer_download_url: https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-linux.tar.gz
+installer_path: "{{ playbook_dir }}/files"
+install_dir: "{{ playbook_dir }}/ocp4_install"
+ignition_http_path: /var/www/html/ocp/install/
 
 terraform:
-  project: /home/user/terraform/ocp/ocp4
-  image_path: /mnt/vms/images/rhcos-4.7.0-x86_64-qemu.x86_64.qcow2
+  binary_path: "{{ playbook_dir }}/files"
+  project_path: "{{ playbook_dir }}/terraform/ocp/ocp4"
+  image_path: "{{ rhcos_path }}/{{ rhcos_download_url.split('/')[-1].split('.')[:-1] | join('.') }}"
   prepared_image: true
   memory: "16384"
   vcpu: 4
+
 network:
   domain: ocp4.lab.local
   dns: 192.168.0.1

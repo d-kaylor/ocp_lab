@@ -1,13 +1,12 @@
-ssh_args: "-o StrictHostKeyChecking=accept-new"
-ansible_ssh_pass: "{{ root_password }}"
 authorized_key: "/home/user/.ssh/id_rsa.pub"
 
 configure_dnsmasq: false
 configure_haproxy: false
 
 terraform:
-  project: /home/user/terraform/ocp/ocp3
-  image_path: /mnt/vms/images/rhel-server-7.8-x86_64-ocp.qcow2
+  binary_path: "{{ playbook_dir }}/files"
+  project_path: "{{ playbook_dir }}/terraform/ocp/ocp3"
+  image_path: /mnt/vms/images/rhel-server-7.9-update-3-x86_64-kvm.qcow2
   prepared_image: true
   memory: "8192"
   vcpu: 4
@@ -18,10 +17,3 @@ network:
   cidr: 23
   gateway: 192.168.0.1
   load_balancer: 192.168.0.1
-
-subscription:
-  rhsm_user: "user"
-  rhsm_password: "{{ rhsm_password }}"
-  rhsm_pool: "8a85f9996c6dca38016c8be5352434c5"
-  registry_user: "user"
-  registry_password: "password"
