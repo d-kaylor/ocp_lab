@@ -13,7 +13,7 @@ ignition_http_path: /var/www/html/ocp/install/
 
 terraform:
   binary_path: "{{ playbook_dir }}/files"
-  project_path: "{{ playbook_dir }}/terraform/ocp/ocp4"
+  project_path: "{{ playbook_dir }}/terraform/ocp4"
   image_path: "{{ rhcos_path }}/{{ rhcos_download_url.split('/')[-1].split('.')[:-1] | join('.') }}"
   prepared_image: true
   memory: "16384"

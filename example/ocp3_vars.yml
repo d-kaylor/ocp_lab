@@ -5,7 +5,7 @@ configure_haproxy: false
 
 terraform:
   binary_path: "{{ playbook_dir }}/files"
-  project_path: "{{ playbook_dir }}/terraform/ocp/ocp3"
+  project_path: "{{ playbook_dir }}/terraform/ocp3"
   image_path: /mnt/vms/images/rhel-server-7.9-update-3-x86_64-kvm.qcow2
   prepared_image: true
   memory: "8192"
