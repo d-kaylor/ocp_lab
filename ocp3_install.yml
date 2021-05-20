@@ -161,6 +161,7 @@
         password: "{{ rhsm_password }}"
         pool_ids: "{{ rhsm_pool }}"
         autosubscribe: no
+      throttle: 1
 
     - name: Disable all RHSM repositories
       rhsm_repository:

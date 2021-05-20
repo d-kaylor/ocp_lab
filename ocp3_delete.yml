@@ -46,6 +46,7 @@
         password: "{{ rhsm_password }}"
         pool_ids: "{{ rhsm_pool }}"
         autosubscribe: no
+      throttle: 1
 
     - name: Destroy VMs
       terraform:
