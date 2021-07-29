@@ -96,7 +96,7 @@
                     mode tcp
                     option tcplog
                 {% for ip in master_ips %}
-                    server infra-{{loop.index}} {{ ip }}:443 check
+                    server master-{{loop.index}} {{ ip }}:443 check
                 {% endfor %}
 
           - name: haproxy - restart service
